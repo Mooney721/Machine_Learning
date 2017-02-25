@@ -1,0 +1,282 @@
+---
+title: "Practical Machine Learning"
+author: "Christopher Maier"
+date: "February 23, 2017"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+
+This report seeks to quantify how well a particular exercise activity has been performed, specifically how well a particular set of participants has performed the activity of lifting a barbell. 
+
+Through the usage of activity tracking devices, vast amounts of data can be obtained in a relatively efficient manner. These devices allow for their users to track "how much" activity has been performed; however, these activities do not tend to justly see the attention of how well a given activity is performed. 
+
+This report will track how well the participants involved within the study performed their exercises. Data was collected from accelerometers on 6 different participants. These participants exercised by performing barbell lifts in 5 different ways (correctly and 4 different ways incorrectly.
+
+Machine learning models were evaluated; the gradient boosting method was used for analysis and the resulting predicted classes were determined using this method.
+
+## Data Processing
+
+Based on the source of *Human Activity Recognition* (see <http://groupware.les.inf.puc-rio.br/har>), data was obtained containing information from barbell lifts from 6 different participants. These participants were asked to perform the Unilateral Dumbbell Biceps Curl in 10 repetitions and in 5 different ways. Class A refers to performing the activity to correct specifications, while the other 4 classes used to classify the activity performance referred to lifting while making common mistakes: throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Note that to obtain this information, data was collected using accelerometers on the belt, forearm, arm, and dumbell of these activity participants.
+
+### Reading in the Human Activity Recognition Data
+
+A new directory was created to store the raw human activity recognition training file. This directory was then set for the proceeding analysis the raw file was downloaded from the source. The raw data file was then read in as a comma-separated value data set. 
+
+```{r dataReadIn, echo = TRUE, cache = FALSE, message = FALSE, warning = FALSE} 
+# Create directory in which to put data
+directorySetup <- function(object) {
+     dir.create(as.character(as.list(match.call())[2]))
+}
+directorySetup(HumanActivityRecognition)
+setwd("~/HumanActivityRecognition")
+
+# Download data from source
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv")
+
+# Read the csv file from the download 
+training <- read.csv("pml-training.csv")
+
+# Remove first column (X: index) from data set
+training <- training[-c(1)]
+```
+
+After reading in the data, it was shown that there are 19622 rows with 159 columns (after removing index column), as shown below. 
+
+```{r dim, echo = TRUE}
+# Show dimensions of data
+dim(training)
+```
+
+### Subsetting the Data 
+
+Note that not all 159 columns of data were used for the proceeding analysis. Features which had an inordinate amount of NA/blank values were excluded from the analysis due to, otherwise, a much lower volume of data. Note that these features were specific to data obtained at each given observation window (such as average, standard deviation, and variance at pitch, roll, and yaw for a given observation window). Additionally, for similar reasons, the skewness, kurtosis, max, min, and amplitude values were removed. Also, the user name, timestamp, and window features were also removed, since the analysis was not to focus on these variables. Note that 53 columns remained after this subsetting. 
+
+```{r subset, echo = TRUE}
+# Using colSums(is.na(train)), determine number of NAs in data frame
+colSums(is.na(training))
+
+# Remove columns with NAs
+training <- training[,!sapply(training, function(x) any(is.na(x)))]
+
+# Remove columns with skewness, kurtosis variables
+training <-training[, !grepl("skewness|kurtosis", colnames(training))]
+
+# Remove columns with max, min, amplitude
+training <-training[, !grepl("max|min|amplitude", colnames(training))]
+
+# Remove user_name, raw_timestamps (parts 1 and 2), cvtd_timestamp, new_window, and num_window
+furtherRemove <- c("user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp",
+                   "new_window", "num_window")
+training <- training[, -which(names(training) %in% furtherRemove)]
+
+# Show dimension after removing columns above
+dim(training)
+```
+
+### Feature Extraction and Selection 
+
+Next, (further) feature extraction and selection were performed. First, the data was divided into training and testing data sets, as this is standard prior to feature selection processes (i.e., testing data should not influence testing data). Note that although this data set was already deemed a training set via the source, this data was subdivided for the analysis so as to perform training, allowing for random variation. 
+
+```{r subdivision, echo = TRUE, message = FALSE, warning = FALSE}
+# Use caret library for data partition
+library(caret)
+
+# Further divide training data set into training and testing
+inTrain <- createDataPartition(y=training$classe, p=0.70, list=FALSE)
+training <- training[inTrain,]
+testing <- training[-inTrain,]
+
+# Dimensions of training and testing data
+dim(training)
+dim(testing)
+```
+
+The near-zero variance technique was used to further remove features which may as such be covariates with zero (or near-zero) variance. This further brought the number of features for analysis to 51. 
+
+```{r nearZero, echo = TRUE}
+# Now use NSV to determine if any more variables may be removed from model by potentially removing zero covariates
+set.seed(1)
+nsv <- nearZeroVar(training, saveMetrics = TRUE)
+training <- training[, -nearZeroVar(nsv)] 
+testing <- testing[, -nearZeroVar(nsv)]
+
+# New dimensions of training (and testing) data
+dim(training)
+dim(testing)
+```
+
+Next, a correlation matrix approach was used for further feature selection. As such, features which had a high correlation (75% was used in this analysis) were removed. Only 32 features remained. See **Figure 1** for the remaining correlation plot.
+
+```{r correlation, echo = TRUE}
+# Now use correlation for further feature selection; remove features > 75% correlated
+corTrain <- cor(training[,-51])
+corRemove <- findCorrelation(corTrain, 0.75)
+training <- training[, -corRemove]
+testing <- testing[, -corRemove]
+
+# New dimensions of training (and testing) data
+dim(training)
+dim(testing)
+```
+ 
+**Figure 1: Correlation Plot of Human Activity Recognition Features**
+```{r correlationPlot, echo = TRUE, message = FALSE, warning = FALSE}
+library(corrplot)
+corTrainRemoved <- cor(training[-32])
+corrplot(corTrainRemoved, order = "hclust")
+```
+ 
+ 
+## Results
+
+### Training Models 
+
+Since the number of features had been decreased to only those determined necessary for analysis through data volume as well as near-zero variance, correlation, the focus was then on training the data to determine the accuracy of the model. Note that the response variable for the analysis was the class of exercise (variable "classe"). For this, the "Accuracy"" measure per the *caret* package was used to determine accuracy of the model.
+
+To determine the proper classes for the testing data per the Human Activity Recognition data source, classification techniques were chosen to train the data. Specifically, the techniques for recursive partitioning, Naive Bayes, and gradient boosting were chosen for analysis being classification algorithms. Note that due to the computational power needed to run these algorithms, parallel processing was performed. See **Charts 2 - 4** for graphical representation of these results.
+
+```{r modeling, echo = TRUE, message = FALSE, warning = FALSE}
+# Run parallel processing for modeling
+library(parallel)
+library(doParallel)
+
+# Run parallel processing for recursive partitioning
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+# Run recursive partitioning technique
+set.seed(1)
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 3, allowParallel = TRUE)
+trainRPART <- train(classe ~., method = "rpart", data = training, trControl = control)
+
+# De-registering of parallel processing cluster
+stopCluster(cluster)
+registerDoSEQ()
+
+
+# Run parallel processing for Naive Bayes modeling
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+# Run Naive Bayes technique
+set.seed(1)
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 3, allowParallel = TRUE)
+trainNB <- train(classe ~., method = "nb", data = training, trControl = control)
+
+# De-registering of parallel processing cluster
+stopCluster(cluster)
+registerDoSEQ()
+
+# Run parallel processing for gradient boosting modeling
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+# Run gradient boosting technique
+set.seed(1)
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 3, allowParallel = TRUE)
+trainGBM <- train(classe ~., method = "gbm", data = training, trControl = control)
+
+# De-registering of parallel processing cluster
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+**Figure 2: Recursive Partitioning Model**
+```{r rpartPlot, echo = TRUE}
+plot(trainRPART)
+```
+ 
+**Figure 3: Naive Bayes Model**
+```{r nbPlot, echo = TRUE}
+plot(trainNB)
+```
+ 
+**Figure 4: Gradient Boosting Model**
+```{r GBMPlot, echo = TRUE}
+plot(trainGBM)
+```
+ 
+
+### Comparing the Models
+Since we ran two models for this analysis, we can compare the three models against each other to determine which has the higher accuracy. As previously mentioned, the Accuracy value was chosen as the metric to determine accuracy. As shown in **Figure 5**, we see that, in terms of accuracy, the gradient boosted model was determined to be more accurate. Therefore, the gradient boosted model was selected for prediction. 
+
+```{r compare_intro, echo = TRUE, message = FALSE, warning = FALSE}
+# load the mlbench library
+library(mlbench)
+
+# collect resamples from models
+comparisons <- resamples(list(RPART = trainRPART, NB = trainNB, GBM = trainGBM))
+```
+
+**Figure 5: Comparing Recursive Partitioning, Naive Bayes, and Gradient Boosting Models**
+```{r compare, echo = TRUE, message = FALSE, warning = FALSE}
+dotplot(comparisons, main = "Comparing Different Models")
+```
+
+### Predicting the Testing Data from the Model
+Thus, since the gradient boosting model was chosen for prediction, the gradient boosting model was used to predict the class for the testing data set given by the Human Activity Recognition source. See the table below for prediction results. 
+
+```{r predict, echo = TRUE}
+# Determine the predicted values for the analysis, based on the chosen model
+prediction <- predict(trainGBM, testing)
+
+# Table of predicted results
+table(prediction)
+```
+
+### Predicting the Testing Data Per Data Source
+Now that we have assessed the accuracy of the model chosen, lastly, the model will be used on the testing data per <http://groupware.les.inf.puc-rio.br/har>. Note that first, the data was prepared the same way as the earlier training and testing data sets used in the analysis.  
+
+```{r subsetTesting, echo = TRUE, warning = FALSE}
+# Create directory in which to put data
+directorySetup <- function(object) {
+     dir.create(as.character(as.list(match.call())[2]))
+}
+directorySetup(HumanActivityRecognition)
+setwd("~/HumanActivityRecognition")
+
+# Download data from source
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv")
+
+# Read the csv file from the download 
+testing <- read.csv("pml-testing.csv")
+
+# Remove first column (X: index) from data set
+testing <- testing[-c(1)]
+
+# Remove columns with NAs
+testing <- testing[,!sapply(testing, function(x) any(is.na(x)))]
+
+# Remove columns with skewness, kurtosis variables
+testing <-testing[, !grepl("skewness|kurtosis", colnames(testing))]
+
+# Remove columns with max, min, amplitude
+testing <-testing[, !grepl("max|min|amplitude", colnames(testing))]
+
+# Remove user_name, raw_timestamps (parts 1 and 2), cvtd_timestamp, new_window, and num_window
+furtherRemove <- c("user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp",
+                   "new_window", "num_window")
+testing <- testing[, -which(names(testing) %in% furtherRemove)]
+
+# Show dimension after removing columns above
+dim(testing)
+
+# Remove additional columns to match training data set through NSV and correlation
+testing <- testing[-nearZeroVar(nsv)]
+testing <- testing[,-corRemove]
+```
+
+Next, the remaining features were used for prediction. See the below for the prediction results.
+```{r predictTesting, echo = TRUE}
+# Determine the predicted values for the analysis, based on the chosen model
+prediction <- predict(trainGBM, testing)
+print(prediction)
+
+# Table of predicted results
+table(prediction)
+```
