@@ -422,7 +422,7 @@ comparisons <- resamples(list(RPART = trainRPART, NB = trainNB, GBM = trainGBM, 
 dotplot(comparisons, main = "Comparing Different Models")
 ```
 
-![](human_activity_recognition_final_project_files/figure-html/compare-1.png)<!-- -->
+![compare plot](human_activity_recognition_final_project_files/figure-html/compare-1.png)<!-- -->
 
 ### Predicting the Testing Data from the Model
 Thus, since the random forest model was chosen for prediction, the random forest model was used to predict the class for the testing data set given by the Human Activity Recognition source. See the table below for prediction results. 
