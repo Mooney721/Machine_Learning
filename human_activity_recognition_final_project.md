@@ -401,7 +401,7 @@ plot(trainGBM)
 plot(trainRF)
 ```
 
-![](human_activity_recognition_final_project_files/figure-html/RFPlot-1.png)<!-- -->
+![trainRF](human_activity_recognition_final_project_files/figure-html/RFPlot-1.png)<!-- -->
  
 
 ### Comparing the Models
